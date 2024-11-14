@@ -1,0 +1,210 @@
+/* Company X data cleaning each table */
+-- identifying duplicate data in the inventory table
+SELECT *,
+ROW_NUMBER() OVER(
+PARTITION BY sku_id, vendor_name, warehouse_id, current_inventory_quantity, cost_per_sku,
+total_value, units_kg, avg_lead_time_days, max_lead_time_days, unit_price) AS row_num
+FROM inventory;
+
+WITH duplicate_inventory AS
+(
+SELECT *,
+ROW_NUMBER() OVER(
+PARTITION BY sku_id, vendor_name, warehouse_id, current_inventory_quantity, cost_per_sku,
+total_value, units_kg, avg_lead_time_days, max_lead_time_days, unit_price) AS row_num
+FROM inventory
+)
+SELECT *
+FROM duplicate_inventory
+WHERE row_num > 1; -- 0 duplicates identified
+
+-- identifying duplicate data in the sales table
+SELECT *,
+ROW_NUMBER() OVER(
+PARTITION BY order_number, order_date, sku_id, warehouse_id, customer_type, order_quantity,
+unit_sale_price, revenue) AS row_num
+FROM sales;
+
+WITH duplicate_sales AS
+(
+SELECT *,
+ROW_NUMBER() OVER(
+PARTITION BY order_number, order_date, sku_id, warehouse_id, customer_type, order_quantity,
+unit_sale_price, revenue) AS row_num
+FROM sales
+)
+SELECT *
+FROM duplicate_sales
+WHERE row_num > 1; -- 0 duplicates identified
+
+-- identifying duplicate data in the sku items table
+SELECT *,
+ROW_NUMBER() OVER(
+PARTITION BY sku_id, sku_name) AS row_num
+FROM skuitems;
+
+WITH duplicate_sku AS
+(
+SELECT *,
+ROW_NUMBER() OVER(
+PARTITION BY sku_id, sku_name) AS row_num
+FROM skuitems
+)
+SELECT *
+FROM duplicate_sku
+WHERE row_num > 1; -- 0 duplicates identified
+
+-- identifying duplicate data in the items table
+SELECT *,
+ROW_NUMBER() OVER(
+PARTITION BY warehouse_code, city, province, country, latitude, longitude) AS row_num
+FROM warehouse;
+
+WITH duplicate_warehouse AS
+(
+SELECT *,
+ROW_NUMBER() OVER(
+PARTITION BY warehouse_code, city, province, country, latitude, longitude) AS row_num
+FROM warehouse
+)
+SELECT *
+FROM duplicate_warehouse
+WHERE row_num > 1; -- 0 duplicates identified
+
+-- General review of data
+SELECT *
+FROM skuitems; -- there is a double up on the heading name in skuitems table.
+
+SELECT *
+FROM skuitems
+WHERE sku_id LIKE 'sku%';
+
+DELETE
+FROM skuitems
+WHERE sku_name LIKE 'sku%'; -- removed duplicate heading name in skuitems table.
+
+/* The date in the sales table is listed as a text and should be in a date format */
+DESC sales; -- order date listed as text.
+
+SELECT order_date,
+str_to_date(order_date, '%d/%m/%Y')
+FROM sales;
+
+UPDATE sales
+SET order_date = str_to_date(order_date, '%d/%m/%Y');
+
+ALTER TABLE sales
+MODIFY COLUMN order_date DATE; -- data type now shows as a date instead of text
+
+/* Question 1: What is the total sales and orders to date? */
+SELECT ROUND(SUM(revenue),2) AS total_sales
+FROM sales; -- total revenue is $513,806,424
+
+SELECT ROUND(SUM(order_quantity),2) AS total_orders
+FROM sales; -- total orders is 14,679,912 orders from 2021 to 2023
+
+/* Question 2: What does the sales trend look like? */
+SELECT DATE(order_date), SUM(revenue) AS revenue, SUM(order_quantity) AS order_qty
+FROM sales
+GROUP BY DATE(order_date);
+
+/* Question 3: What is the total on hand inventory quantity */
+SELECT SUM(current_inventory_quantity) AS on_hand_inventory
+FROM inventory; -- count of the inventory is 1,995,792 units of stock
+
+/* Question 4: What is the cost of the on hand inventory? */
+SELECT ROUND(SUM(current_inventory_quantity*unit_price),2) AS total_inventory_cost
+FROM inventory; -- total cost of the inventory is $77,330,259
+
+/* Question 5: What is the monthly demand of each item? */
+SELECT 
+sku_name,
+ROUND(SUM(order_quantity/31),5) AS monthly_demand
+FROM sales AS s
+	INNER JOIN skuitems AS sk
+		ON s.sku_id = sk.sku_id
+GROUP BY sku_name
+ORDER BY sku_name DESC;
+/* The monthly demand was calculated by taking the sum of the order quantity and dividing this by the total 
+number of months. The given period of the data was 2.5 years, so the data was 31 months. */
+
+/* Question 6:  How much of the inventory is overstocked?*/ 
+WITH overstock_inventory AS(
+SELECT 
+sku_name,
+ROUND(SUM(order_quantity/31),5) AS monthly_demand,
+current_inventory_quantity,
+ROUND((avg_lead_time_days+max_lead_time_days/2),0/30.417) AS lead_time_months,
+unit_sale_price
+FROM sales AS s
+	INNER JOIN skuitems AS sk
+		ON s.sku_id = sk.sku_id
+	INNER JOIN inventory AS i
+		ON sk.sku_id = i.sku_id
+GROUP BY sku_name, current_inventory_quantity, lead_time_months, unit_sale_price)
+/* To calculate the lead time, I took the average of the average lead time and the maximum lead time */
+        
+SELECT
+sku_name,
+ROUND(lead_time_months+monthly_demand,2) AS demand,
+(current_inventory_quantity/lead_time_months+monthly_demand) AS months_on_hand,
+(current_inventory_quantity*unit_sale_price) AS overstock_cost
+FROM overstock_inventory
+HAVING months_on_hand > 8
+ORDER BY sku_name ASC;
+/* Total units with stock level over 8 months is 242 of 303 total products or 80% of the inventory is overstocked */
+
+/* Question 7:  What is the total cost of the overstocked inventory items?*/ 
+WITH overstock_cost AS(
+SELECT 
+sku_name,
+ROUND(SUM(order_quantity/31),5) AS monthly_demand,
+current_inventory_quantity,
+unit_sale_price,
+ROUND((avg_lead_time_days+max_lead_time_days/2),0/30.417) AS lead_time_months
+FROM sales AS s
+	INNER JOIN skuitems AS sk
+		ON s.sku_id = sk.sku_id
+	INNER JOIN inventory AS i
+		ON sk.sku_id = i.sku_id
+GROUP BY sku_name, unit_sale_price, current_inventory_quantity, lead_time_months)
+        
+SELECT
+(current_inventory_quantity/lead_time_months+monthly_demand) AS months_on_hand,
+(unit_sale_price*current_inventory_quantity) AS overstock_value
+FROM overstock_cost
+HAVING months_on_hand > 8;
+/* Overstock value for 80% of the inventory, comes to $67,421,427.
+This leaves $9,908,832 remaining in the inventory that can be used */
+
+/* Question 8:  Where are these overstocked inventory distributed in the warehouses?*/
+WITH overstock_location AS(
+SELECT 
+city,
+ROUND(SUM(order_quantity/31),5) AS monthly_demand,
+current_inventory_quantity,
+unit_sale_price,
+ROUND((avg_lead_time_days+max_lead_time_days/2),0/30.417) AS lead_time_months
+FROM sales AS s
+	INNER JOIN skuitems AS sk
+		ON s.sku_id = sk.sku_id
+	INNER JOIN inventory AS i
+		ON sk.sku_id = i.sku_id
+	INNER JOIN warehouse AS W
+		ON i.warehouse_id = w.warehouse_code
+GROUP BY city, unit_sale_price, current_inventory_quantity, lead_time_months)
+
+SELECT
+DISTINCT city,
+(unit_sale_price*current_inventory_quantity) AS overstock_value,
+(current_inventory_quantity/lead_time_months+monthly_demand) AS months_on_hand
+FROM overstock_location
+GROUP BY city, months_on_hand, overstock_value
+HAVING months_on_hand > 8;
+/* As per each warehouse, the value of the overstock is:
+Estevan - 14,169,526
+Martensville - 20,093,953
+Saint-Pamphile - 12,999,299
+Stanstead - 20,158,648 
+
+This totals to the amount of $67,421,427 which is 80% of the inventory over 8 months of stock*/
