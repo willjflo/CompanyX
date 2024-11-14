@@ -1,3 +1,5 @@
+/* This code is linked to my Maven Analytics page where a PowerBI visual can be viewed from some of the below queries */
+
 /* Company X data cleaning each table */
 -- identifying duplicate data in the inventory table
 SELECT *,
@@ -95,6 +97,10 @@ SET order_date = str_to_date(order_date, '%d/%m/%Y');
 
 ALTER TABLE sales
 MODIFY COLUMN order_date DATE; -- data type now shows as a date instead of text
+
+/* I have developed a series of questions to answer Company X's questions of how much of their inventory 
+is overstocked and linked the code to create some PowerBI visual dashboards */
+
 
 /* Question 1: What is the total sales and orders to date? */
 SELECT ROUND(SUM(revenue),2) AS total_sales
